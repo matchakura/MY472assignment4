@@ -8,7 +8,7 @@ output: html_document
 knitr::opts_chunk$set(echo = FALSE) 
 ```
 
-```{r warning=FALSE, message=FALSE, include=FALSE,}
+```{r warning=FALSE, message=FALSE, include=FALSE}
 library(tidyverse)
 library(RSQLite)
 library(httr)
@@ -28,10 +28,12 @@ library(mvnormtest )
 ```
 
 # An Analysis of Multi Potential Biases in Police Stop and Searches in the UK
-## The github repo for this assignment can be found [here]
+The github repo for this assignment can be found [here](https://github.com/matchakura/MY472assignment4)
 
-###Introduction
+
+### Introduction
 This present study investigated potential biases in police stop-and-search in UK between 2020 and 2023. Association and significance tests were conducted for demographics, such as age, gender, and ethnicity, accordingly to identify the possible biases in the UK police actions.  
+
 
 ### Data
 The data is composed of more than 1 million records of stop-and-search provided by [police data](https://data.police.uk/). The data covered December 2020 to November 2023, while some missing values exist. 
@@ -40,10 +42,11 @@ After a general review of descriptive statistics of demographic characteristics,
 
 By conducting normality test and T-test, the study aims to identify whether there are significant difference between outcomes of stop-and-search for different ethic groups groups. 
 
+
 ### Conclusion
 While the graphs display difference in outcomes among different ethic groups, the t-test results reject the significant difference, indicating that the police stop-and-search is not biased in terms of ethic groups.
 
-```{r}
+```{r warning=FALSE, message=FALSE}
 # Initialize the api that returns the available dataset
 api_endpoint <- "https://data.police.uk/api/crimes-street-dates"
 
@@ -89,8 +92,7 @@ colnames(date_forceid_df) <- gsub("\\.", " ", colnames(date_forceid_df))
 date_forceid_df$missing_values_count <- rowSums(is.na(date_forceid_df))
 date_forceid_df <- date_forceid_df %>%
   select(date, missing_values_count, everything())
-# Print the data frame
-print(date_forceid_df)
+
 
 # Find the missing value count for each force_id
 missing_counts <- date_forceid_df %>%
@@ -101,7 +103,7 @@ missing_counts <- date_forceid_df %>%
 
 ```
 
-```{r}
+```{r warning = FALSE, message = FALSE}
 # Initialize lists to store data of stop and search, and to record missing values
 sns_data <- list()
 
@@ -148,10 +150,6 @@ for (id in force_id){
     }
   }
 }
-
-```
-
-```{r}
 # Due to the reason of missing values, the number of columns might vary across different data frame
 # Therefore, data will be cleaned before combining the lists
 
@@ -210,17 +208,19 @@ sns_df <- sns_df %>%
   filter(involved_person == TRUE)
 
 # Now a dataframe with stop and search data during 2020.12 and 2023.11 has been created, which only includes values of interests
+
 ```
 
-## Analysis
-### Descriptive Statistics
-#### Age
+
+## Analysis - Descriptive Statistics
+
+### Age
 It is shown in the Pie Chart that 18-24 age group has the highest rate of stop-and-searches (28.5%) followed by over 34 group (21.7%) and 25-34 (21.2%), and the people under 10 has the lowest rate. The scatter plot indicates that the trending of stop-and-searches is similar across different age groups, except for people under 10. While this may suggest a potential impact from time, or change of social environment across time, further evidence is needed to draw an association.
 Due to the reason that no observable difference is found across different age groups, this report will not focus on the age group analysis. 
 
-#####Graph 1 & 2: 
+#### Graph 1 & 2: 
 
-```{r echo=FALSE}
+```{r warning=FALSE, message=FALSE, echo=FALSE}
 # Convert the "datetime" column to anobject
 sns_df$datetime <- lubridate::ymd_hms(sns_df$datetime, tz = "UTC")
 
@@ -268,12 +268,14 @@ age_scatter_plot <- ggplot(total_stop_search_monthly, aes(x = month, y = total_s
 print(age_scatter_plot)
 
 ```
-#### Gender
+
+
+### Gender
 The histogram shows that the male groups (87.8%) experienced more stop-and-searches compared to female (10.3%) and other. While an significant gender disparity was found, significance test will be applied later. 
 
-#####Graph 3 & 4: 
+#### Graph 3 & 4: 
 
-```{r echo=FALSE}
+```{r warning=FALSE, message=FALSE, echo=FALSE}
 total_stop_search_gender <- sns_df %>%
   group_by(gender) %>%
   summarize(total_stop_search = n())
@@ -294,6 +296,10 @@ gender_histogram <- ggplot(total_stop_search_gender, aes(x = gender, y = total_s
 # Display the plot
 print(gender_histogram)
 
+total_stop_search_monthly_gender <- sns_df %>%
+  group_by(month, gender) %>%
+  summarize(total_stop_search = n())
+
 # Scatter Plot for gender with smaller dots and a geom line for each gender
 gender_scatter_plot <- ggplot(total_stop_search_monthly_gender, aes(x = month, y = total_stop_search, color = gender)) +
   geom_point(position = position_dodge(width = 0.5), size = 2) +  # Adjust size as needed
@@ -308,15 +314,18 @@ print(gender_scatter_plot)
 
 
 ```
-#### Ethnicity
+
+
+### Ethnicity
 It is shown that While group has the highest rate of experiencing stop-and-search (60.9%), followed by Black (19.1%) and Asian (12.1%). In terms of percentage of outcomes by officer-defined ethnicity, it follows similar patterns across all ethic groups, and therefore a table is used to display numeric values.
 
 Overall, no further action takes around 72.7% of outcome, with arrest being the second highest outcome. The arrest rate is highest in mixed group (18.7%), followed by 14.4% in Black, and lowest in Asian group (11.5%). In terms of Penalty rate, it is much lower in While group (0.9%) compared to 2.7% in Asian and 2.3% in black. 
 
 Given the observed difference in overall percentage of stop-and-search, in related to arrest and penalty rate, this study will explore the potential racial biases in stop-and-search actions.
 
-#####Graph 3 & 4, Table 1: 
-```{r echo=FALSE}
+#### Graph 3 & 4, Table 1: 
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
 # Calculate total number of stop-and-search for each officer_defined_ethnicity
 total_stop_search_ethnicity <- sns_df %>%
   group_by(officer_defined_ethnicity) %>%
@@ -341,7 +350,7 @@ print(ethnicity_pie_chart)
 
 
 # Calculate the proportion of outcomes by officer-defined ethnicity
-percentage_data <- combined_data %>%
+percentage_data <- sns_df %>%
   filter(!is.na(outcome), outcome != "", !is.na(officer_defined_ethnicity)) %>%
   group_by(officer_defined_ethnicity, outcome) %>%
   count() %>%
@@ -375,10 +384,14 @@ percentage_table <- formatted_data %>%
 print(percentage_table)
 
 ```
-#### Object of search
+
+### Object of search
 The tables shows that highest object of search is controlled drugs (62.7%) followed by offensive weapons (14.6%) and stolen goods (9.8%). 
-#####Table 2:
-```{r echo=FALSE}
+
+#### Table 2:
+
+```{warning=FALSE, message=FALSE, echo=FALSE}
+
 # Filter rows where object_of_search values exist
 filtered_sns_df <- sns_df %>% filter(!is.na(object_of_search))
 
@@ -406,11 +419,14 @@ knitr::kable(total_stop_search_object, caption = "Object of Search Statistics")
 
 ```
 
-### Inferential Statistics
-#### Measurement of biases
+
+## Inferential Statistics
+
+### Measurement of biases
 After standardization, the rate of stop-and-search is highest in Black group, followed by Others and Asian. Additionally, the graphs indicates a moderately decrease in two time-points, Nov 2022 and June 2023 across all ethnicity except for Mixed This could suggest a potential influence from social background (e.g., event, holiday, etc.) and further research could be helpful. 
-#####Graph 5: 
-```{r echo=FALSE}
+
+#### Graph 5: 
+```{r warning=FALSE, message=FALSE, echo=FALSE}
 census_ethnicity <- read.csv("Ethnic_group.csv") %>%
   rename(officer_defined_ethnicity = "Ethnic.group..20.categories.", ethnicity_census = "Observation") %>%
   filter(officer_defined_ethnicity %in% c("Asian", "Black", "Mixed", "White", "Other")) %>%
@@ -451,14 +467,14 @@ ethnicity_scatter_graph <- ggplot(merged_data_ethnicity, aes(x = month, y = stan
 # Print the scatter graph
 print(ethnicity_scatter_graph)
 
-
 ```
+
 
 More specifically, this study examines four outcomes out of four nations. Caution, community resolution, penalty, and arrest were chosen, which represent different level of severity of outcomes. Mixed group was not included due to relatively small sample size. 
 The results show that arrest has the highest rate after standardization, followed by community resolution and penalty. It indicates that arrest is the most common outcome of police stop-and-search, while police seldom use caution. 
 While the percentage of the four outcomes are relatively close in Asian compared with Other ethic group, the Black group has the highest rate of receiving the all four outcomes, and the white receives the lowest. 
 
-```{r echo=FALSE}
+```{r warning=FALSE, message=FALSE, echo=FALSE}
 # Apply standardization to "n" column in percentage_data
 percentage_data_standardized <- percentage_data %>%
   left_join(census_ethnicity, by = "officer_defined_ethnicity") %>%
@@ -489,12 +505,16 @@ print(grouped_bar_chart)
 
 
 ```
+
+### Normality Test & T-test
 Following by the Bar charts, Paired t-test was applied to examine the difference between means of four outcomes in different ethic groups. 
 Firstly, all the p-values from normality tests are greater than 0.05, indicating that the distribution of the differences (d) are not significantly different from normal distribution. Therefore, we can assume the normality.
+
 However, the t-tests between the White and Black, Asian and White, Asian and Black are all not significant, indicating that the differences between the means of the two groups outcomes are not significantly different from each other. 
+
 Therefore, the results do not support the racial biases in stop-and-search outcomes among different ethical groups. 
 
-```{r echo=FALSE}
+```{r warning=FALSE, message=FALSE, echo=FALSE}
 # Combine select and rename operations
 t_test_df <- percentage_data_standardized %>%
   select(officer_defined_ethnicity, outcome, stand_n) %>%
@@ -534,6 +554,7 @@ res2
 res3
 
 ```
+
 
 ## Appendix: All code in this assignment
 
