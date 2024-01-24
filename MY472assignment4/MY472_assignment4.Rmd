@@ -1,0 +1,543 @@
+---
+title: "MY472_assignment4"
+date: "24 Jan 2024"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(echo = FALSE) 
+```
+
+```{r warning=FALSE, message=FALSE, include=FALSE,}
+library(tidyverse)
+library(RSQLite)
+library(httr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(tidyr)
+library(knitr)
+library(jsonlite)
+library(ggplot2)
+library(scales)
+library(tools)
+library(plotly)
+library(stats)
+library(mvnormtest )
+
+```
+
+# An Analysis of Multi Potential Biases in Police Stop and Searches in the UK
+## The github repo for this assignment can be found [here]
+
+###Introduction
+This present study investigated potential biases in police stop-and-search in UK between 2020 and 2023. Association and significance tests were conducted for demographics, such as age, gender, and ethnicity, accordingly to identify the possible biases in the UK police actions.  
+
+### Data
+The data is composed of more than 1 million records of stop-and-search provided by [police data](https://data.police.uk/). The data covered December 2020 to November 2023, while some missing values exist. 
+In addition to the police data, a [census data of ethnicity](https://www.ons.gov.uk/census) will be used. 
+After a general review of descriptive statistics of demographic characteristics, including age, gender, and ethical groups, the study will then focus on the ethical group and outcomes of stop-and-search.
+
+By conducting normality test and T-test, the study aims to identify whether there are significant difference between outcomes of stop-and-search for different ethic groups groups. 
+
+### Conclusion
+While the graphs display difference in outcomes among different ethic groups, the t-test results reject the significant difference, indicating that the police stop-and-search is not biased in terms of ethic groups.
+
+```{r}
+# Initialize the api that returns the available dataset
+api_endpoint <- "https://data.police.uk/api/crimes-street-dates"
+
+# Make a GET request
+get_response <- GET(url = api_endpoint)
+
+# Check the response status
+if (http_status(get_response)$category == "Success") {
+  # Print the content of the response
+  stop_and_search <- content(get_response, as = "parsed")
+  
+  # Initialize an empty list to store the extracted information
+  date_forceid <- list()
+  
+  # Loop through each element in the list
+  for (i in seq_along(stop_and_search)) {
+    # Extract date information
+    date_info <- stop_and_search[[i]]$date
+    
+    # Extract stop-and-search information
+    force_id_info <- stop_and_search[[i]]$`stop-and-search`
+    
+    # Combine date and stop-and-search information into a list
+    combined_info <- list(date = date_info, stop_and_search = force_id_info)
+    
+    # Append the combined information to the list
+    date_forceid <- c(date_forceid, list(combined_info))
+  }
+  
+  # Convert the list to a data frame using dplyr's bind_rows
+  date_forceid_df <- bind_rows(lapply(date_forceid, as.data.frame))
+
+} else {
+  # Print an error message
+  stop("Error in GET request:", http_status(get_response)$reason)
+}
+
+# Clean the variable name
+colnames(date_forceid_df) <- gsub("^stop_and_search", "", colnames(date_forceid_df))
+colnames(date_forceid_df) <- gsub("\\.", " ", colnames(date_forceid_df))
+
+# Find the missing values across each month
+date_forceid_df$missing_values_count <- rowSums(is.na(date_forceid_df))
+date_forceid_df <- date_forceid_df %>%
+  select(date, missing_values_count, everything())
+# Print the data frame
+print(date_forceid_df)
+
+# Find the missing value count for each force_id
+missing_counts <- date_forceid_df %>%
+  gather(key = "force_id", value = "value", -date, -missing_values_count) %>%
+  group_by(force_id) %>%
+  summarize(missing_count = sum(is.na(value))) %>%
+   arrange(missing_count)
+
+```
+
+```{r}
+# Initialize lists to store data of stop and search, and to record missing values
+sns_data <- list()
+
+# Use force IDs with zero missing values
+force_id <- missing_counts %>%
+  pull(force_id) %>%
+  str_trim() %>%        # Remove leading and trailing spaces
+  str_replace_all(" ", "-")  # Replace spaces with hyphens
+
+# Create a list of dates 
+start_date <- ym("2020-12")
+end_date <- ym("2023-11")
+# Create a list of dates (year and month only)
+dates <- seq(ym("2020-12"), ym("2023-11"), by = "1 month") %>%
+  format("%Y-%m")
+
+# Loop through each police force id in each month
+for (id in force_id){
+  for (date in dates){
+    # Construct the API endpoint
+    force_endpoint <- paste0("https://data.police.uk/api/stops-force?force=", id, "&date=", date)
+    # Make a GET request
+    sns_response <- GET(url = force_endpoint)
+    
+    # Create a key for each force and date
+    key <- paste(id, date, sep = "_")
+    
+    # Check the response status
+    if (http_status(sns_response)$category == "Success") {
+      # Parse the JSON response
+      force_data <- fromJSON(rawToChar(sns_response$content), flatten = TRUE)
+      
+      # Check whether the response is empty
+      if (length(force_data) > 0) {
+        # Add found data to the list
+        sns_data[[key]] <- force_data
+      } else {
+        # Add NA if missing values
+        sns_data[[key]] <- NA
+      }
+    } else {
+      # Print a warning message for unsuccessful requests
+      warning(paste("Error in GET request for", date, "and force ID", id, ":", http_status(sns_response)$reason))
+    }
+  }
+}
+
+```
+
+```{r}
+# Due to the reason of missing values, the number of columns might vary across different data frame
+# Therefore, data will be cleaned before combining the lists
+
+# Get all column names
+column_names <- unique(unlist(lapply(sns_data, names)))
+
+# Function to standardize the data frame in the list
+cleaning_function <- function(df, column_names) {
+  # If there are missing values, add NA
+  missing_values <- setdiff(column_names, names(df))
+  for (i in missing_values) {
+    df[[i]] <- NA
+  }
+  # Match the order
+  df <- df[, column_names]
+  return(df)
+}
+
+
+# Apply cleaening function to each data frame
+sns_data_cleaned <- lapply(sns_data, function(i) {
+  if (is.data.frame(i) && nrow(i) > 0) {
+    return(cleaning_function(i, column_names))
+  } else {
+    return(NA)
+  }
+})
+
+# Combine the list of data frames
+sns_df <- do.call(rbind, sns_data_cleaned)
+#Remove columns with all NA values
+sns_df <- sns_df %>% select_if(~any(!is.na(.)))
+
+# Add force_id column
+sns_df <- cbind(force_id = rownames(sns_df), sns_df)
+# Clean the force_id column
+sns_df <- sns_df %>%
+  mutate(force_id = sub("_.*", "", force_id)) %>%
+  mutate(force_id = gsub("-", " ", force_id))
+
+# Select columns to keep
+selected_columns <- c(
+  "force_id",
+  "age_range",
+  "outcome",
+  "involved_person",
+  "gender",
+  "datetime",
+  "officer_defined_ethnicity",
+  "object_of_search"
+)
+
+# Subset the dataframe to include only selected columns
+sns_df <- sns_df %>% 
+  select(all_of(selected_columns))%>%
+  filter(involved_person == TRUE)
+
+# Now a dataframe with stop and search data during 2020.12 and 2023.11 has been created, which only includes values of interests
+```
+
+## Analysis
+### Descriptive Statistics
+#### Age
+It is shown in the Pie Chart that 18-24 age group has the highest rate of stop-and-searches (28.5%) followed by over 34 group (21.7%) and 25-34 (21.2%), and the people under 10 has the lowest rate. The scatter plot indicates that the trending of stop-and-searches is similar across different age groups, except for people under 10. While this may suggest a potential impact from time, or change of social environment across time, further evidence is needed to draw an association.
+Due to the reason that no observable difference is found across different age groups, this report will not focus on the age group analysis. 
+
+#####Graph 1 & 2: 
+
+```{r echo=FALSE}
+# Convert the "datetime" column to anobject
+sns_df$datetime <- lubridate::ymd_hms(sns_df$datetime, tz = "UTC")
+
+# Create a new column "month" with the format "YYYY-MM"
+sns_df$month <- format(sns_df$datetime, "%Y-%m")
+
+# Calculate total number of stop-and-search for each age_range
+total_stop_search <- sns_df %>%
+  group_by(age_range) %>%
+  summarize(total_stop_search = n())
+
+# Calculate the percentage of stop-and-search in each age range
+total_stop_search <- total_stop_search %>%
+  mutate(percentage = total_stop_search / sum(total_stop_search) * 100)
+
+# Pie Chart
+age_pie_chart <- ggplot(total_stop_search, aes(x = "", y = percentage, fill = age_range)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = scales::percent(percentage / 100), y = percentage), 
+            position = position_stack(vjust = 0.5), size = 3) +
+  coord_polar("y") +
+  labs(title = "Percentage of Stop-and-Search by Age Range", fill = "Age Range") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+# Print the pie chart
+print(age_pie_chart)
+
+
+# Calculate total number of stop-and-search for each age_range across months
+total_stop_search_monthly <- sns_df %>%
+  group_by(month, age_range) %>%
+  summarize(total_stop_search = n())
+
+# Scatter Plot
+age_scatter_plot <- ggplot(total_stop_search_monthly, aes(x = month, y = total_stop_search, color = age_range)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +  
+  geom_line(aes(group = age_range), position = position_dodge(width = 0.5), size = 1) + 
+  labs(title = "Total Stop-and-Search Over Time by Age Range", x = "Month", y = "Total Stop-and-Search") +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  scale_x_discrete(breaks = unique(total_stop_search_monthly$month)[c(1, 6, 12, 18, 24, 30,36)])
+
+# Print the scatter plot
+print(age_scatter_plot)
+
+```
+#### Gender
+The histogram shows that the male groups (87.8%) experienced more stop-and-searches compared to female (10.3%) and other. While an significant gender disparity was found, significance test will be applied later. 
+
+#####Graph 3 & 4: 
+
+```{r echo=FALSE}
+total_stop_search_gender <- sns_df %>%
+  group_by(gender) %>%
+  summarize(total_stop_search = n())
+
+# Calculate the percentage of each gender group
+total_stop_search_gender <- total_stop_search_gender %>%
+  mutate(percentage = (total_stop_search / sum(total_stop_search)) * 100)
+
+# Plotting the histogram 
+gender_histogram <- ggplot(total_stop_search_gender, aes(x = gender, y = total_stop_search, fill = gender)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.1f%%", percentage)), vjust = -0.5, size = 3) +  # Add percentage labels
+  labs(title = "Total Number of Stop-and-Search for Gender",
+       x = "Gender",
+       y = "Total Stop-and-Search") +
+  theme_minimal()
+
+# Display the plot
+print(gender_histogram)
+
+# Scatter Plot for gender with smaller dots and a geom line for each gender
+gender_scatter_plot <- ggplot(total_stop_search_monthly_gender, aes(x = month, y = total_stop_search, color = gender)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +  # Adjust size as needed
+  geom_line(aes(group = gender), position = position_dodge(width = 0.5), size = 1) +  # Add lines
+  labs(title = "Total Stop-and-Search Over Time by Gender", x = "Month", y = "Total Stop-and-Search") +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  scale_x_discrete(breaks = unique(total_stop_search_monthly_gender$month)[c(1, 6, 12, 18, 24, 30, 36)])  # Specify which months to display
+
+# Print the gender scatter plot
+print(gender_scatter_plot)
+
+
+```
+#### Ethnicity
+It is shown that While group has the highest rate of experiencing stop-and-search (60.9%), followed by Black (19.1%) and Asian (12.1%). In terms of percentage of outcomes by officer-defined ethnicity, it follows similar patterns across all ethic groups, and therefore a table is used to display numeric values.
+
+Overall, no further action takes around 72.7% of outcome, with arrest being the second highest outcome. The arrest rate is highest in mixed group (18.7%), followed by 14.4% in Black, and lowest in Asian group (11.5%). In terms of Penalty rate, it is much lower in While group (0.9%) compared to 2.7% in Asian and 2.3% in black. 
+
+Given the observed difference in overall percentage of stop-and-search, in related to arrest and penalty rate, this study will explore the potential racial biases in stop-and-search actions.
+
+#####Graph 3 & 4, Table 1: 
+```{r echo=FALSE}
+# Calculate total number of stop-and-search for each officer_defined_ethnicity
+total_stop_search_ethnicity <- sns_df %>%
+  group_by(officer_defined_ethnicity) %>%
+  summarize(total_stop_search = n())
+
+# Calculate the percentage of stop-and-search in each officer_defined_ethnicity
+total_stop_search_ethnicity <- total_stop_search_ethnicity %>%
+  mutate(percentage = total_stop_search / sum(total_stop_search) * 100)
+
+# Pie Chart
+ethnicity_pie_chart <- ggplot(total_stop_search_ethnicity, aes(x = "", y = percentage, fill = officer_defined_ethnicity)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = scales::percent(percentage / 100), y = percentage), 
+            position = position_stack(vjust = 0.5), size = 3) +  # Adjust size as needed
+  coord_polar("y") +
+  labs(title = "Percentage of Stop-and-Search by Officer Defined Ethnicity", fill = "Officer Defined Ethnicity") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+# Print the officer_defined_ethnicity pie chart
+print(ethnicity_pie_chart)
+
+
+# Calculate the proportion of outcomes by officer-defined ethnicity
+percentage_data <- combined_data %>%
+  filter(!is.na(outcome), outcome != "", !is.na(officer_defined_ethnicity)) %>%
+  group_by(officer_defined_ethnicity, outcome) %>%
+  count() %>%
+  group_by(officer_defined_ethnicity) %>%
+  mutate(proportion = n / sum(n))
+
+# Stacked bar chart
+percentage_plot <- ggplot(percentage_data, aes(x = officer_defined_ethnicity, y = proportion, fill = outcome)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Percentage of Outcomes by Officer-Defined Ethnicity",
+    x = "Officer-Defined Ethnicity", y = "Proportion (%)",
+    fill = "Outcome"
+  ) +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent_format())
+
+# Print the plot
+print(percentage_plot)
+
+formatted_data <- percentage_data %>%
+  mutate(across(where(is.numeric), ~sprintf("%.1f", . * 100)))
+
+# Create the proportion_table with formatted values
+percentage_table <- formatted_data %>%
+  select(officer_defined_ethnicity, outcome, proportion) %>%
+  tidyr::pivot_wider(names_from = outcome, values_from = proportion) %>%
+  knitr::kable(caption = "Proportion of Outcomes by Officer-Defined Ethnicity")
+
+# Print the formatted table
+print(percentage_table)
+
+```
+#### Object of search
+The tables shows that highest object of search is controlled drugs (62.7%) followed by offensive weapons (14.6%) and stolen goods (9.8%). 
+#####Table 2:
+```{r echo=FALSE}
+# Filter rows where object_of_search values exist
+filtered_sns_df <- sns_df %>% filter(!is.na(object_of_search))
+
+# Calculate total number of stop-and-search for each object_of_search
+total_stop_search_object <- filtered_sns_df %>%
+  group_by(object_of_search) %>%
+  summarize(total_stop_search = n())
+
+# Calculate the percentage of stop-and-search for each object_of_search
+total_stop_search_object <- total_stop_search_object %>%
+  mutate(Percentage = sprintf("%.2f%%", total_stop_search / sum(total_stop_search) * 100))
+
+# Rename the column names
+colnames(total_stop_search_object) <- c("Object of Search", "Total ", "Percentage")
+
+# Convert the Percentage column to numeric
+total_stop_search_object$Percentage <- as.numeric(gsub("%", "", total_stop_search_object$Percentage))
+
+# Reorder the table by percentage in descending order
+total_stop_search_object <- total_stop_search_object %>%
+  arrange(desc(Percentage))
+
+# Display a table with percentage and total number for each type of object_of_search
+knitr::kable(total_stop_search_object, caption = "Object of Search Statistics")
+
+```
+
+### Inferential Statistics
+#### Measurement of biases
+After standardization, the rate of stop-and-search is highest in Black group, followed by Others and Asian. Additionally, the graphs indicates a moderately decrease in two time-points, Nov 2022 and June 2023 across all ethnicity except for Mixed This could suggest a potential influence from social background (e.g., event, holiday, etc.) and further research could be helpful. 
+#####Graph 5: 
+```{r echo=FALSE}
+census_ethnicity <- read.csv("Ethnic_group.csv") %>%
+  rename(officer_defined_ethnicity = "Ethnic.group..20.categories.", ethnicity_census = "Observation") %>%
+  filter(officer_defined_ethnicity %in% c("Asian", "Black", "Mixed", "White", "Other")) %>%
+  mutate(ethnicity_census = as.numeric(ethnicity_census))
+
+# Remove the NA row
+standardized_ethnicity <- total_stop_search_ethnicity[-nrow(total_stop_search_ethnicity), ] 
+
+merged_data <- merge(standardized_ethnicity, census_ethnicity, by = "officer_defined_ethnicity")
+
+merged_data <- merged_data %>%
+  mutate(stand_sns = (total_stop_search / ethnicity_census) * 1000)
+
+
+# Calculate total number of stop-and-search for each ethnicity across months
+total_stop_search_monthly_ethnicity <- sns_df %>%
+  group_by(month, officer_defined_ethnicity) %>%
+  summarize(total_stop_search = n())
+
+# Merge with census data
+merged_data_ethnicity <- merge(total_stop_search_monthly_ethnicity, census_ethnicity, by = "officer_defined_ethnicity")
+
+# Calculate standardized rate per 1,000 population
+merged_data_ethnicity <- merged_data_ethnicity %>%
+  mutate(stand_sns = (total_stop_search / ethnicity_census) * 1000)
+
+# Line graph
+ethnicity_scatter_graph <- ggplot(merged_data_ethnicity, aes(x = month, y = stand_sns, color = officer_defined_ethnicity)) +
+  geom_line(aes(group = officer_defined_ethnicity), position = position_dodge(width = 0.5), size = 1) +
+  geom_point(size = 2) +
+  labs(title = "Standardized Stop-and-Search Over Time by Ethnicity",
+       x = "Month", y = "Standardized Stop-and-Search per 1000",
+       color = "Ethnicity") +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  scale_x_discrete(breaks = unique(total_stop_search_monthly$month)[c(1, 6, 12, 18, 24, 30,36)])
+
+# Print the scatter graph
+print(ethnicity_scatter_graph)
+
+
+```
+
+More specifically, this study examines four outcomes out of four nations. Caution, community resolution, penalty, and arrest were chosen, which represent different level of severity of outcomes. Mixed group was not included due to relatively small sample size. 
+The results show that arrest has the highest rate after standardization, followed by community resolution and penalty. It indicates that arrest is the most common outcome of police stop-and-search, while police seldom use caution. 
+While the percentage of the four outcomes are relatively close in Asian compared with Other ethic group, the Black group has the highest rate of receiving the all four outcomes, and the white receives the lowest. 
+
+```{r echo=FALSE}
+# Apply standardization to "n" column in percentage_data
+percentage_data_standardized <- percentage_data %>%
+  left_join(census_ethnicity, by = "officer_defined_ethnicity") %>%
+  mutate(stand_n = (n / ethnicity_census) * 1000)
+
+# Filter out the outcome 
+percentage_data_filtered <- percentage_data_standardized %>%
+  filter(outcome != "A no further action disposal")%>%
+  filter(outcome != "Summons / charged by post")%>%
+  filter(outcome != "Khat or Cannabis warning")%>%
+  filter(officer_defined_ethnicity != "Mixed")
+
+
+# Grouped bar chart with facet_wrap
+grouped_bar_chart <- ggplot(percentage_data_filtered, aes(x = officer_defined_ethnicity, y = stand_n, fill = officer_defined_ethnicity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Standardized Stop-and-Search Outcome by Ethnicity",
+    x = "Ethnicity", y = "Standardized Stop-and-Search per 1000",
+    fill = "Ethnicity"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  facet_wrap(~outcome, scales = "free_y", ncol = 1)
+
+# Print the grouped bar chart with facet_wrap
+print(grouped_bar_chart)
+
+
+```
+Following by the Bar charts, Paired t-test was applied to examine the difference between means of four outcomes in different ethic groups. 
+Firstly, all the p-values from normality tests are greater than 0.05, indicating that the distribution of the differences (d) are not significantly different from normal distribution. Therefore, we can assume the normality.
+However, the t-tests between the White and Black, Asian and White, Asian and Black are all not significant, indicating that the differences between the means of the two groups outcomes are not significantly different from each other. 
+Therefore, the results do not support the racial biases in stop-and-search outcomes among different ethical groups. 
+
+```{r echo=FALSE}
+# Combine select and rename operations
+t_test_df <- percentage_data_standardized %>%
+  select(officer_defined_ethnicity, outcome, stand_n) %>%
+  rename(ethnicity = officer_defined_ethnicity, stand_sns = stand_n)
+
+
+# Summary the data
+#percentage_data_standardized %>%
+  #summary(ethnicity, type = "mean_sd")
+
+# Normality test 
+black_white <- with(t_test_df, 
+        stand_sns[ethnicity == "Black"] - stand_sns[ethnicity == "White"])
+shapiro.test(black_white)
+
+asian_black <- with(t_test_df, 
+        stand_sns[ethnicity == "Black"] - stand_sns[ethnicity == "Asian"])
+shapiro.test(asian_black)
+
+asian_white <- with(t_test_df, 
+        stand_sns[ethnicity == "Asian"] - stand_sns[ethnicity == "White"])
+shapiro.test(asian_white)
+
+# All the p-values are greater than 0.05, indicating that the distribution of the differences (d) are not significantly different from normal distribution. Therefore, we can assume the normality.
+
+white <- subset(t_test_df,  ethnicity == "White", stand_sns, drop = TRUE)
+black <- subset(t_test_df,  ethnicity == "Black", stand_sns, drop = TRUE)
+asian <- subset(t_test_df,  ethnicity == "Asian", stand_sns, drop = TRUE)
+
+
+res1 <- t.test(white, black, paired = TRUE)
+res2 <- t.test(white, asian, paired = TRUE)
+res3 <- t.test(asian, black, paired = TRUE)
+
+res1
+res2
+res3
+
+```
+
+## Appendix: All code in this assignment
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE} 
+# this chunk generates the complete code appendix. 
+# eval=FALSE tells R not to run (``evaluate'') the code here (it was already run before).
+```
